@@ -1618,6 +1618,9 @@ static void free_dma_rx_desc_resources(struct stmmac_priv *priv)
 					  sizeof(struct dma_extended_desc),
 					  rx_q->dma_erx, rx_q->dma_rx_phy);
 
+		if (xdp_rxq_info_is_reg(&rx_q->xdp_rxq))
+			xdp_rxq_info_unreg(&rx_q->xdp_rxq);
+
 		kfree(rx_q->buf_pool);
 		if (rx_q->page_pool)
 			page_pool_destroy(rx_q->page_pool);
@@ -1699,6 +1702,16 @@ static int alloc_dma_rx_desc_resources(struct stmmac_priv *priv)
 			rx_q->page_pool = NULL;
 			goto err_dma;
 		}
+
+		ret = xdp_rxq_info_reg(&rx_q->xdp_rxq, priv->dev, queue);
+		if (ret < 0)
+			goto err_dma;
+
+		ret = xdp_rxq_info_reg_mem_model(&rx_q->xdp_rxq,
+						 MEM_TYPE_PAGE_POOL,
+						 rx_q->page_pool);
+		if (ret < 0)
+			goto err_dma;
 
 		rx_q->buf_pool = kcalloc(priv->dma_rx_size,
 					 sizeof(*rx_q->buf_pool),

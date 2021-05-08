@@ -72,6 +72,7 @@ struct stmmac_rx_queue {
 	u32 rx_count_frames;
 	u32 queue_index;
 	struct page_pool *page_pool;
+	struct xdp_rxq_info xdp_rxq;
 	struct stmmac_rx_buffer *buf_pool;
 	struct stmmac_priv *priv_data;
 	struct dma_extended_desc *dma_erx;
