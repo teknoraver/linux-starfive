@@ -38,6 +38,9 @@
 #include <linux/phylink.h>
 #include <linux/udp.h>
 #include <net/pkt_cls.h>
+#include <linux/bpf.h>
+#include <linux/bpf_trace.h>
+#include <net/xdp.h>
 #include "stmmac_ptp.h"
 #include "stmmac.h"
 #include <linux/reset.h>
@@ -119,6 +122,11 @@ static void stmmac_exit_fs(struct net_device *dev);
 
 #define FLUSH_TX_DESC_ENABLE
 #define FLUSH_TX_BUF_ENABLE
+
+#define STMMAC_XDP_PASS		0
+#define STMMAC_XDP_DROPPED	BIT(0)
+#define STMMAC_XDP_TX		BIT(1)
+#define STMMAC_XDP_REDIR	BIT(2)
 
 #include <soc/starfive/vic7100.h>
 static inline void stmmac_flush_dcache(unsigned long start, unsigned long len)
@@ -1688,13 +1696,14 @@ static int alloc_dma_rx_desc_resources(struct stmmac_priv *priv)
 		rx_q->queue_index = queue;
 		rx_q->priv_data = priv;
 
-		pp_params.flags = PP_FLAG_DMA_MAP;
+		pp_params.flags = PP_FLAG_DMA_MAP /*| PP_FLAG_DMA_SYNC_DEV*/;
 		pp_params.pool_size = priv->dma_rx_size;
 		num_pages = DIV_ROUND_UP(priv->dma_buf_sz, PAGE_SIZE);
 		pp_params.order = ilog2(num_pages);
 		pp_params.nid = dev_to_node(priv->device);
 		pp_params.dev = priv->device;
 		pp_params.dma_dir = DMA_FROM_DEVICE;
+		// pp_params.offset = XDP_PACKET_HEADROOM;
 
 		rx_q->page_pool = page_pool_create(&pp_params);
 		if (IS_ERR(rx_q->page_pool)) {
@@ -3892,6 +3901,50 @@ static unsigned int stmmac_rx_buf2_len(struct stmmac_priv *priv,
 	return plen - len;
 }
 
+static int stmmac_run_xdp(struct stmmac_priv *priv, struct bpf_prog *prog,
+			  struct xdp_buff *xdp, struct page_pool *pp)
+{
+	unsigned int len, sync, err;
+	struct page *page;
+	u32 ret, act;
+
+	len = xdp->data_end - xdp->data_hard_start;
+	act = bpf_prog_run_xdp(prog, xdp);
+
+	/* Due xdp_adjust_tail: DMA sync for_device cover max len CPU touch */
+	sync = xdp->data_end - xdp->data_hard_start;
+	sync = max(sync, len);
+
+	switch (act) {
+	case XDP_PASS:
+		ret = STMMAC_XDP_PASS;
+		break;
+	case XDP_REDIRECT:
+		err = xdp_do_redirect(priv->dev, xdp, prog);
+		if (unlikely(err)) {
+			ret = STMMAC_XDP_DROPPED;
+			page = virt_to_head_page(xdp->data);
+			page_pool_put_page(pp, page, sync, true);
+		} else {
+			ret = STMMAC_XDP_REDIR;
+		}
+		break;
+	default:
+		bpf_warn_invalid_xdp_action(act);
+		fallthrough;
+	case XDP_ABORTED:
+		trace_xdp_exception(priv->dev, prog, act);
+		fallthrough;
+	case XDP_DROP:
+		page = virt_to_head_page(xdp->data);
+		page_pool_put_page(pp, page, sync, true);
+		ret = STMMAC_XDP_DROPPED;
+		break;
+	}
+
+	return ret;
+}
+
 /**
  * stmmac_rx - manage the receive process
  * @priv: driver private structure
@@ -3905,9 +3958,15 @@ static int stmmac_rx(struct stmmac_priv *priv, int limit, u32 queue)
 	struct stmmac_rx_queue *rx_q = &priv->rx_queue[queue];
 	struct stmmac_channel *ch = &priv->channel[queue];
 	unsigned int count = 0, error = 0, len = 0;
-	int status = 0, coe = priv->hw->rx_csum;
+	int status = 0, coe = priv->hw->rx_csum, ret;
 	unsigned int next_entry = rx_q->cur_rx;
 	struct sk_buff *skb = NULL;
+	struct bpf_prog *xdp_prog;
+	struct xdp_buff xdp_buf;
+
+	rcu_read_lock();
+
+	xdp_prog = READ_ONCE(priv->xdp_prog);
 
 	if (netif_msg_rx_status(priv)) {
 		void *rx_head;
@@ -4033,6 +4092,24 @@ read_again:
 			len -= ETH_FCS_LEN;
 		}
 
+		if (xdp_prog) {
+			xdp_buf.data_hard_start = page_address(buf->page);
+			xdp_buf.data = page_address(buf->page);
+			xdp_buf.data_end = xdp_buf.data + buf1_len;
+			xdp_buf.frame_sz = PAGE_SIZE;
+			xdp_buf.rxq = &rx_q->xdp_rxq;
+
+			xdp_set_data_meta_invalid(&xdp_buf);
+
+			ret = stmmac_run_xdp(priv, xdp_prog, &xdp_buf, rx_q->page_pool);
+
+			if (ret) {
+				stmmac_init_rx_buffers(priv, p, entry,
+						       GFP_ATOMIC, queue);
+				goto drain_data;
+			}
+		}
+
 		if (!skb) {
 			skb = napi_alloc_skb(&ch->rx_napi, buf1_len);
 			if (!skb) {
@@ -4111,6 +4188,8 @@ drain_data:
 		priv->dev->stats.rx_bytes += len;
 		count++;
 	}
+
+	rcu_read_unlock();
 
 	if (status & rx_not_ls || skb) {
 		rx_q->state_saved = true;
@@ -4830,6 +4909,46 @@ static int stmmac_vlan_rx_kill_vid(struct net_device *ndev, __be16 proto, u16 vi
 	return stmmac_vlan_update(priv, is_double);
 }
 
+static int stmmac_xdp_setup(struct stmmac_priv *priv, struct netdev_bpf *bpf)
+{
+	struct bpf_prog *prog = bpf->prog, *old_prog;
+	bool running = netif_running(priv->dev);
+	bool reset = !prog != !priv->xdp_prog;
+
+	if (priv->dev->mtu > ETH_DATA_LEN) {
+		NL_SET_ERR_MSG_MOD(bpf->extack, "XDP is not supported with jumbo frames enabled");
+		return -EOPNOTSUPP;
+	}
+
+	/* device is up and bpf is added/removed, must setup the RX queues */
+	if (running && reset)
+		stmmac_release(priv->dev);
+
+	old_prog = xchg(&priv->xdp_prog, prog);
+	if (old_prog)
+		bpf_prog_put(old_prog);
+
+	/* bpf is just replaced, RXQ and MTU are already setup */
+	if (!reset)
+		return 0;
+
+	/* device was up, restore the link */
+	if (running)
+		stmmac_open(priv->dev);
+
+	return 0;
+}
+
+static int stmmac_xdp(struct net_device *dev, struct netdev_bpf *xdp)
+{
+	struct stmmac_priv *priv = netdev_priv(dev);
+
+	if (xdp->command != XDP_SETUP_PROG)
+		return -EINVAL;
+
+	return stmmac_xdp_setup(priv, xdp);
+}
+
 static const struct net_device_ops stmmac_netdev_ops = {
 	.ndo_open = stmmac_open,
 	.ndo_start_xmit = stmmac_xmit,
@@ -4848,6 +4967,7 @@ static const struct net_device_ops stmmac_netdev_ops = {
 	.ndo_set_mac_address = stmmac_set_mac_address,
 	.ndo_vlan_rx_add_vid = stmmac_vlan_rx_add_vid,
 	.ndo_vlan_rx_kill_vid = stmmac_vlan_rx_kill_vid,
+	.ndo_bpf = stmmac_xdp,
 };
 
 static void stmmac_reset_subtask(struct stmmac_priv *priv)
