@@ -1375,13 +1375,15 @@ static void stmmac_clear_rx_descriptors(struct stmmac_priv *priv, u32 queue)
 					priv->dma_buf_sz);
 
 #ifdef FLUSH_RX_DESC_ENABLE
-	unsigned long len;
-	if (priv->extend_desc)
-		len = DMA_DEFAULT_RX_SIZE * sizeof(struct dma_extended_desc);
-	else
-		len = DMA_DEFAULT_RX_SIZE * sizeof(struct dma_desc);
+	{
+		unsigned long len;
+		if (priv->extend_desc)
+			len = DMA_DEFAULT_RX_SIZE * sizeof(struct dma_extended_desc);
+		else
+			len = DMA_DEFAULT_RX_SIZE * sizeof(struct dma_desc);
 
-	stmmac_flush_dcache(rx_q->dma_rx_phy, len);
+		stmmac_flush_dcache(rx_q->dma_rx_phy, len);
+	}
 #endif
 }
 
@@ -1413,13 +1415,15 @@ static void stmmac_clear_tx_descriptors(struct stmmac_priv *priv, u32 queue)
 	}
 
 #ifdef FLUSH_TX_DESC_ENABLE
-	unsigned long len;
-	if (priv->extend_desc)
-		len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_extended_desc);
-	else
-		len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_desc);
+	{
+		unsigned long len;
+		if (priv->extend_desc)
+			len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_extended_desc);
+		else
+			len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_desc);
 
-	stmmac_flush_dcache(tx_q->dma_tx_phy, len);
+		stmmac_flush_dcache(tx_q->dma_tx_phy, len);
+	}
 #endif
 }
 
@@ -1812,6 +1816,7 @@ static int __init_dma_tx_desc_rings(struct stmmac_priv *priv, u32 queue)
 		tx_q->tx_skbuff[i] = NULL;
 	}
 #ifdef FLUSH_TX_DESC_ENABLE
+	{
 		unsigned long len;
 		if (priv->extend_desc)
 			len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_extended_desc);
@@ -1819,6 +1824,7 @@ static int __init_dma_tx_desc_rings(struct stmmac_priv *priv, u32 queue)
 			len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_desc);
 
 		stmmac_flush_dcache(tx_q->dma_tx_phy, len);
+	}
 #endif
 
 	tx_q->dirty_tx = 0;
@@ -2619,17 +2625,19 @@ static int stmmac_tx_clean(struct stmmac_priv *priv, int budget, u32 queue)
 
 		stmmac_release_tx_desc(priv, p, priv->mode);
 #ifdef FLUSH_TX_DESC_ENABLE
-		/*wangyh for test,flush description*/
-		unsigned long start, len;
-		if (priv->extend_desc) {
-			start = tx_q->dma_tx_phy + entry * sizeof(struct dma_extended_desc);
-			len = sizeof(struct dma_extended_desc);
-		} else {
-			start = tx_q->dma_tx_phy + entry * sizeof(struct dma_desc);
-			len = sizeof(struct dma_desc);
-		}
+		{
+			/*wangyh for test,flush description*/
+			unsigned long start, len;
+			if (priv->extend_desc) {
+				start = tx_q->dma_tx_phy + entry * sizeof(struct dma_extended_desc);
+				len = sizeof(struct dma_extended_desc);
+			} else {
+				start = tx_q->dma_tx_phy + entry * sizeof(struct dma_desc);
+				len = sizeof(struct dma_desc);
+			}
 
-		stmmac_flush_dcache(start, len);
+			stmmac_flush_dcache(start, len);
+		}
 #endif
 
 		entry = STMMAC_GET_ENTRY(entry, priv->dma_tx_size);
@@ -2706,13 +2714,15 @@ static void stmmac_tx_err(struct stmmac_priv *priv, u32 chan)
 	stmmac_clear_tx_descriptors(priv, chan);
 
 #ifdef FLUSH_TX_DESC_ENABLE
-	unsigned long len;
-	if (priv->extend_desc)
-		len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_extended_desc);
-	else
-		len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_desc);
+	{
+		unsigned long len;
+		if (priv->extend_desc)
+			len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_extended_desc);
+		else
+			len = DMA_DEFAULT_TX_SIZE * sizeof(struct dma_desc);
 
-	stmmac_flush_dcache(tx_q->dma_tx_phy, len);
+		stmmac_flush_dcache(tx_q->dma_tx_phy, len);
+	}
 #endif
 	tx_q->dirty_tx = 0;
 	tx_q->cur_tx = 0;
@@ -3960,16 +3970,18 @@ static void stmmac_tso_allocator(struct stmmac_priv *priv, dma_addr_t des,
 				0, 0);
 
 #ifdef FLUSH_TX_DESC_ENABLE
-		unsigned long start, len;
-		if (priv->extend_desc) {
-			start = tx_q->dma_tx_phy + tx_q->cur_tx * sizeof(struct dma_extended_desc);
-			len = sizeof(struct dma_extended_desc);
-		} else {
-			start = tx_q->dma_tx_phy + tx_q->cur_tx * sizeof(struct dma_desc);
-			len = sizeof(struct dma_desc);
-		}
+		{
+			unsigned long start, len;
+			if (priv->extend_desc) {
+				start = tx_q->dma_tx_phy + tx_q->cur_tx * sizeof(struct dma_extended_desc);
+				len = sizeof(struct dma_extended_desc);
+			} else {
+				start = tx_q->dma_tx_phy + tx_q->cur_tx * sizeof(struct dma_desc);
+				len = sizeof(struct dma_desc);
+			}
 
-		stmmac_flush_dcache(start, len);
+			stmmac_flush_dcache(start, len);
+		}
 #endif
 		tmp_len -= TSO_MAX_BUFF_SIZE;
 	}
@@ -4040,6 +4052,7 @@ static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 	int i;
 #ifdef FLUSH_TX_DESC_ENABLE
 	unsigned int mss_entry;
+	unsigned long start, len;
 #endif
 
 	tx_q = &priv->tx_queue[queue];
@@ -4235,7 +4248,6 @@ static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 			hdr / 4, (skb->len - proto_hdr_len));
 
 #ifdef FLUSH_TX_DESC_ENABLE
-	unsigned long start, len;
 	if (priv->extend_desc) {
 		start = tx_q->dma_tx_phy + first_entry * sizeof(struct dma_extended_desc);
 		len = sizeof(struct dma_extended_desc);
@@ -4256,7 +4268,6 @@ static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 		dma_wmb();
 		stmmac_set_tx_owner(priv, mss_desc);
 #ifdef FLUSH_TX_DESC_ENABLE
-		unsigned long start, len;
 		if (priv->extend_desc) {
 			start = tx_q->dma_tx_phy + mss_entry * sizeof(struct dma_extended_desc);
 			len = sizeof(struct dma_extended_desc);
@@ -4314,6 +4325,9 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 	bool has_vlan, set_ic;
 	int entry, first_tx;
 	dma_addr_t des;
+#ifdef FLUSH_TX_DESC_ENABLE
+	unsigned long start, len;
+#endif
 
 	tx_q = &priv->tx_queue[queue];
 	first_tx = tx_q->cur_tx;
@@ -4409,16 +4423,15 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 		stmmac_prepare_tx_desc(priv, desc, 0, len, csum_insertion,
 				priv->mode, 1, last_segment, skb->len);
 #ifdef FLUSH_TX_DESC_ENABLE
-		unsigned long start, desc_len;
 		if (priv->extend_desc) {
 			start = tx_q->dma_tx_phy + entry * sizeof(struct dma_extended_desc);
-			desc_len = sizeof(struct dma_extended_desc);
+			len = sizeof(struct dma_extended_desc);
 		} else {
 			start = tx_q->dma_tx_phy + entry * sizeof(struct dma_desc);
-			desc_len = sizeof(struct dma_desc);
+			len = sizeof(struct dma_desc);
 		}
 
-		stmmac_flush_dcache(start, desc_len);
+		stmmac_flush_dcache(start, len);
 #endif
 	}
 
@@ -4457,7 +4470,6 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 		tx_q->tx_count_frames = 0;
 		stmmac_set_tx_ic(priv, desc);
 #ifdef FLUSH_TX_DESC_ENABLE
-		unsigned long start, len;
 		if (priv->extend_desc) {
 			start = tx_q->dma_tx_phy + entry * sizeof(struct dma_extended_desc);
 			len = sizeof(struct dma_extended_desc);
@@ -4552,7 +4564,6 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 #endif
 
 #ifdef FLUSH_TX_DESC_ENABLE
-	unsigned long start, len;
 	if (priv->extend_desc) {
 		start = tx_q->dma_tx_phy + first_entry * sizeof(struct dma_extended_desc);
 		len = sizeof(struct dma_extended_desc);
@@ -4658,16 +4669,18 @@ static inline void stmmac_rx_refill(struct stmmac_priv *priv, u32 queue)
 		stmmac_set_rx_owner(priv, p, use_rx_wd);
 
 #ifdef FLUSH_RX_DESC_ENABLE
-		unsigned long start, len;
-		if (priv->extend_desc) {
-			start = rx_q->dma_rx_phy + entry * sizeof(struct dma_extended_desc);
-			len = sizeof(struct dma_extended_desc);
-		} else {
-			start = rx_q->dma_rx_phy + entry * sizeof(struct dma_desc);
-			len = sizeof(struct dma_desc);
-		}
+		{
+			unsigned long start, len;
+			if (priv->extend_desc) {
+				start = rx_q->dma_rx_phy + entry * sizeof(struct dma_extended_desc);
+				len = sizeof(struct dma_extended_desc);
+			} else {
+				start = rx_q->dma_rx_phy + entry * sizeof(struct dma_desc);
+				len = sizeof(struct dma_desc);
+			}
 
-		stmmac_flush_dcache(start, len);
+			stmmac_flush_dcache(start, len);
+		}
 #endif
 		dma_wmb();
 
