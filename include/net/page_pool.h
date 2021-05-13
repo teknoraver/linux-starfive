@@ -133,6 +133,9 @@ struct page *page_pool_alloc_pages(struct page_pool *pool, gfp_t gfp);
 static inline struct page *page_pool_dev_alloc_pages(struct page_pool *pool)
 {
 	gfp_t gfp = (GFP_ATOMIC | __GFP_NOWARN);
+#ifdef CONFIG_SOC_STARFIVE_VIC7100
+	gfp |= GFP_DMA32;
+#endif
 
 	return page_pool_alloc_pages(pool, gfp);
 }
